@@ -99,6 +99,7 @@ LIBDIR=
 MANDIR=
 HOMEBREWDIR=
 DBDIR=
+SYSCONFDIR="/etc"
 
 WWWPREFIX="/var/www"
 HTDOCDIR=
@@ -360,7 +361,7 @@ __HEREDOC__
 [ ${HAVE_GETLINE} -eq 0 ] && echo "#include <stdio.h>"
 
 echo
-echo "#define MAN_CONF_FILE \"/etc/${MANM_MANCONF}\""
+echo "#define MAN_CONF_FILE \"${SYSCONFDIR}/${MANM_MANCONF}\""
 echo "#define MANPATH_BASE \"${MANPATH_BASE}\""
 echo "#define MANPATH_DEFAULT \"${MANPATH_DEFAULT}\""
 [ -n "${OSNAME}" ] && echo "#define OSNAME \"${OSNAME}\""
@@ -510,6 +511,7 @@ BIN_FROM_SBIN	= ${BIN_FROM_SBIN}
 INCLUDEDIR	= ${INCLUDEDIR}
 LIBDIR		= ${LIBDIR}
 MANDIR		= ${MANDIR}
+SYSCONFDIR	= ${SYSCONFDIR}
 WWWPREFIX	= ${WWWPREFIX}
 HTDOCDIR	= ${HTDOCDIR}
 CGIBINDIR	= ${CGIBINDIR}
