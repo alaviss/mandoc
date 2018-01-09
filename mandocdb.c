@@ -34,6 +34,7 @@
 #else
 #include "compat_fts.h"
 #endif
+#include <libgen.h>
 #include <limits.h>
 #if HAVE_SANDBOX_INIT
 #include <sandbox.h>
@@ -164,6 +165,7 @@ static	int	 render_string(char **, size_t *);
 static	void	 say(const char *, const char *, ...)
 			__attribute__((__format__ (__printf__, 2, 3)));
 static	int	 set_basedir(const char *, int);
+static	int	 set_dbpath(void);
 static	int	 treescan(void);
 static	size_t	 utf8(unsigned int, char [7]);
 
@@ -176,6 +178,12 @@ static	int		 write_utf8; /* write UTF-8 output; else ASCII */
 static	int		 exitcode; /* to be returned by main */
 static	enum op		 op; /* operational mode */
 static	char		 basedir[PATH_MAX]; /* current base directory */
+/* path to mandoc.db */
+#ifndef MANDOC_DB_DIR
+static	const	char		 dbpath[] = MANDOC_DB;
+#else
+static	char		 dbpath[PATH_MAX + NAME_MAX] = MANDOC_DB_DIR;
+#endif
 static	struct mpage	*mpage_head; /* list of distinct manual pages */
 static	struct ohash	 mpages; /* table of distinct manual pages */
 static	struct ohash	 mlinks; /* table of directory entries */
@@ -431,10 +439,11 @@ mandocdb(int argc, char *argv[])
 		 * Most of these deal with a specific directory.
 		 * Jump into that directory first.
 		 */
-		if (OP_TEST != op && 0 == set_basedir(path_arg, 1))
+		if (OP_TEST != op && 0 == set_basedir(path_arg, 1) &&
+		    0 == set_dbpath())
 			goto out;
 
-		dba = nodb ? dba_new(128) : dba_read(MANDOC_DB);
+		dba = nodb ? dba_new(128) : dba_read(dbpath);
 		if (dba != NULL) {
 			/*
 			 * The existing database is usable.  Process
@@ -510,6 +519,8 @@ mandocdb(int argc, char *argv[])
 			}
 
 			if ( ! set_basedir(conf.manpath.paths[j], argc > 0))
+				continue;
+			if ( ! set_dbpath())
 				continue;
 			if (0 == treescan())
 				continue;
@@ -637,8 +648,10 @@ treescan(void)
 		 * stored directory data and handling the filename.
 		 */
 		case FTS_F:
+#ifndef MANDOC_DB_DIR
 			if ( ! strcmp(path, MANDOC_DB))
 				continue;
+#endif
 			if ( ! use_all && ff->fts_level < 2) {
 				if (warnings)
 					say(path, "Extraneous file");
@@ -2120,6 +2133,13 @@ static void
 dbwrite(struct dba *dba)
 {
 	char		 tfn[32];
+#ifndef MANDOC_DB_DIR
+	const char	 dbnew[] = MANDOC_DB "~";
+#else
+	char		 dbnew[PATH_MAX + NAME_MAX];
+	char		 dbcpy[PATH_MAX + NAME_MAX];
+	char		 dbdir[PATH_MAX];
+#endif
 	int		 status;
 	pid_t		 child;
 
@@ -2130,8 +2150,8 @@ dbwrite(struct dba *dba)
 
 	dba_array_start(dba->pages);
 	if (dba_array_next(dba->pages) == NULL) {
-		if (unlink(MANDOC_DB) == -1 && errno != ENOENT)
-			say(MANDOC_DB, "&unlink");
+		if (unlink(dbpath) == -1 && errno != ENOENT)
+			say(dbpath, "&unlink");
 		return;
 	}
 
@@ -2140,11 +2160,48 @@ dbwrite(struct dba *dba)
 	 * then atomically move it into place.
 	 */
 
-	if (dba_write(MANDOC_DB "~", dba) != -1) {
-		if (rename(MANDOC_DB "~", MANDOC_DB) == -1) {
+#ifdef MANDOC_DB_DIR
+	if (strlcpy(dbnew, dbpath, sizeof(dbnew)) >= sizeof(dbnew)) {
+		exitcode = (int)MANDOCLEVEL_SYSERR;
+		say("", "%s: &strlcpy", dbpath);
+		return;
+	}
+
+	if (strlcat(dbnew, "~", sizeof(dbnew)) >= sizeof(dbnew)) {
+		exitcode = (int)MANDOCLEVEL_SYSERR;
+		say("", "%s: &strlcat", dbpath);
+		return;
+	}
+
+	/* dirname(3) is allowed to change the input string */
+	(void)strlcpy(dbcpy, dbnew, sizeof(dbcpy));
+	(void)strlcpy(dbdir, dirname(dbcpy), sizeof(dbdir));
+	switch (child = fork()) {
+	case -1:
+		exitcode = (int)MANDOCLEVEL_SYSERR;
+		say("", "&fork mkdir");
+		return;
+	case 0:
+		execlp("mkdir", "mkdir", "-p", dbdir, (char *)NULL);
+		say("", "&exec mkdir");
+		exit((int)MANDOCLEVEL_SYSERR);
+	default:
+		break;
+	}
+	if (waitpid(child, &status, 0) == -1) {
+		exitcode = (int)MANDOCLEVEL_SYSERR;
+		say("", "&wait mkdir");
+	} else if (WIFSIGNALED(status) || WEXITSTATUS(status)) {
+		exitcode = (int)MANDOCLEVEL_SYSERR;
+		say("", "%s: Cannot create database directory", dbdir);
+	}
+#endif
+
+	if (dba_write(dbnew, dba) != -1) {
+		if (rename(dbnew, dbpath) == -1) {
 			exitcode = (int)MANDOCLEVEL_SYSERR;
-			say(MANDOC_DB, "&rename");
-			unlink(MANDOC_DB "~");
+			say(dbpath, "&rename");
+			unlink(dbnew);
 		}
 		return;
 	}
@@ -2188,8 +2245,9 @@ dbwrite(struct dba *dba)
 		say("", "cmp died from signal %d", WTERMSIG(status));
 	} else if (WEXITSTATUS(status)) {
 		exitcode = (int)MANDOCLEVEL_SYSERR;
-		say(MANDOC_DB,
-		    "Data changed, but cannot replace database");
+		say("",
+		    "Data changed, but cannot replace database: %s",
+		    dbpath);
 	}
 
 out:
@@ -2293,6 +2351,27 @@ set_basedir(const char *targetdir, int report_baddir)
 		*cp = '\0';
 	}
 	return 1;
+}
+
+static int
+set_dbpath(void)
+{
+#ifndef MANDOC_DB_DIR
+	return 1;
+#else
+	const size_t dbpathsize = sizeof(dbpath);
+	if (strlcat(dbpath, basedir, dbpathsize) >= dbpathsize) {
+		exitcode = (int)MANDOCLEVEL_SYSERR;
+		say("", "&%s: strlcat", MANDOC_DB_DIR);
+		return 0;
+	}
+	if (strlcat(dbpath, MANDOC_DB, dbpathsize) >= dbpathsize) {
+		exitcode = (int)MANDOCLEVEL_SYSERR;
+		say("", "&%s: strlcat", MANDOC_DB_DIR);
+		return 0;
+	}
+	return 1;
+#endif
 }
 
 static void

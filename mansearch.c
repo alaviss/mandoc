@@ -88,6 +88,11 @@ mansearch(const struct mansearch *search,
 		struct manpage **res, size_t *sz)
 {
 	char		 buf[PATH_MAX];
+#ifndef MANDOC_DB_DIR
+	const char	 dbpath[] = MANDOC_DB;
+#else
+	char		 dbpath[PATH_MAX + NAME_MAX] = MANDOC_DB_DIR;
+#endif
 	struct dbm_res	*rp;
 	struct expr	*e;
 	struct dbm_page	*page;
@@ -155,9 +160,22 @@ mansearch(const struct mansearch *search,
 		}
 		chdir_status = 1;
 
-		if (dbm_open(MANDOC_DB) == -1) {
+#ifdef MANDOC_DB_DIR
+		if (strlcat(dbpath, paths->paths[i],
+			    sizeof(dbpath)) >= sizeof(dbpath)) {
+			warn("%s: &strlcat", paths->paths[i]);
+			continue;
+		}
+		if (strlcat(dbpath, "/" MANDOC_DB,
+			    sizeof(dbpath)) >= sizeof(dbpath)) {
+			warn("%s: &strlcat", paths->paths[i]);
+			continue;
+		}
+#endif
+
+		if (dbm_open(dbpath) == -1) {
 			if (errno != ENOENT)
-				warn("%s/%s", paths->paths[i], MANDOC_DB);
+				warn("%s", dbpath);
 			continue;
 		}
 
