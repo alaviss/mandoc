@@ -29,6 +29,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __HAIKU__
+#include <FindDirectory.h>
+#endif
+
 #include "mandoc_aux.h"
 #include "manconf.h"
 
@@ -94,8 +98,26 @@ manconf_parse(struct manconf *conf, const char *file,
 void
 manpath_base(struct manpaths *dirs)
 {
+#ifndef __HAIKU__
 	char path_base[] = MANPATH_BASE;
 	manpath_parseline(dirs, path_base, 0);
+#else
+	char path[PATH_MAX + NAME_MAX];
+	int i;
+
+	const directory_which dw[] = {
+		B_USER_DOCUMENTATION_DIRECTORY,
+		B_SYSTEM_DOCUMENTATION_DIRECTORY
+	};
+
+	for (i = 0; i < sizeof(dw) / sizeof(directory_which); ++i) {
+		if (find_directory(dw[i], -1, 0, path, sizeof(path)) != B_OK)
+			continue;
+		if (strlcat(path, "/man", sizeof(path)) >= sizeof(path))
+			continue;
+		manpath_add(dirs, path, 0);
+	}
+#endif
 }
 
 /*
@@ -166,7 +188,20 @@ static void
 manconf_file(struct manconf *conf, const char *file)
 {
 	const char *const toks[] = { "manpath", "output", "_whatdb" };
+#ifndef __HAIKU__
 	char manpath_default[] = MANPATH_DEFAULT;
+#else
+	int ignore_default = 0;
+	int i;
+	char path[PATH_MAX + NAME_MAX];
+
+	const directory_which dw[] = {
+		B_USER_NONPACKAGED_DOCUMENTATION_DIRECTORY,
+		B_USER_DOCUMENTATION_DIRECTORY,
+		B_SYSTEM_NONPACKAGED_DOCUMENTATION_DIRECTORY,
+		B_SYSTEM_DOCUMENTATION_DIRECTORY
+	};
+#endif
 
 	FILE		*stream;
 	char		*line, *cp, *ep;
@@ -211,7 +246,11 @@ manconf_file(struct manconf *conf, const char *file)
 			/* FALLTHROUGH */
 		case 0:  /* manpath */
 			manpath_add(&conf->manpath, cp, 0);
+#ifndef __HAIKU__
 			*manpath_default = '\0';
+#else
+			ignore_default = 1;
+#endif
 			break;
 		case 1:  /* output */
 			manconf_output(&conf->output, cp, 1);
@@ -224,8 +263,21 @@ manconf_file(struct manconf *conf, const char *file)
 	fclose(stream);
 
 out:
+#ifndef __HAIKU__
 	if (*manpath_default != '\0')
 		manpath_parseline(&conf->manpath, manpath_default, 0);
+#else
+	if (ignore_default)
+		return;
+
+	for (i = 0; i < sizeof(dw) / sizeof(directory_which); ++i) {
+		if (find_directory(dw[i], -1, 0, path, sizeof(path)) != B_OK)
+			continue;
+		if (strlcat(path, "/man", sizeof(path)) >= sizeof(path))
+			continue;
+		manpath_add(&conf->manpath, path, 0);
+	}
+#endif
 }
 
 int
